@@ -12,7 +12,7 @@ import './App.css';
 
 const JAIPUR_CENTER = [26.9124, 75.7873];
 
-const PARKING_LOTS = [
+const DEFAULT_PARKING_LOTS = [
   {
     id: 'parking-1',
     name: 'MI Road Parking',
@@ -60,18 +60,32 @@ const barricadeIcon = L.divIcon({
   iconAnchor: [12, 12],
 });
 
+const parkingIcon = L.divIcon({
+  className: '',
+  html:
+    '<div style="display:flex;align-items:center;justify-content:center;width:22px;height:22px;border-radius:6px;background:rgba(37,99,235,0.96);box-shadow:0 0 0 2px rgba(15,23,42,0.9);font-size:13px;color:#e5e7eb;font-weight:700;">P</div>',
+  iconSize: [22, 22],
+  iconAnchor: [11, 11],
+});
+
 function MapInteraction({
   mode,
   role,
   onAddPointToClosure,
+  onAddAltRoutePoint,
   onSetSource,
   onSetDestination,
+  onSetParkingPoint,
 }) {
   useMapEvents({
     click(e) {
       const { lat, lng } = e.latlng;
       if (role === 'admin' && mode === 'closure') {
         onAddPointToClosure([lat, lng]);
+      } else if (role === 'admin' && mode === 'altRoute') {
+        onAddAltRoutePoint([lat, lng]);
+      } else if (role === 'admin' && mode === 'parking') {
+        onSetParkingPoint([lat, lng]);
       } else if (mode === 'source') {
         onSetSource([lat, lng]);
       } else if (mode === 'destination') {
@@ -94,7 +108,7 @@ function App() {
 
   const [interactionMode, setInteractionMode] = useState(
     initialIsAdminRoute ? 'closure' : 'source',
-  ); // closure | source | destination
+  ); // closure | source | destination | parking
   const [currentClosurePoints, setCurrentClosurePoints] = useState([]);
   const [closures, setClosures] = useState([]);
   const [source, setSource] = useState(null);
@@ -104,15 +118,85 @@ function App() {
   const [isRouting, setIsRouting] = useState(false);
   const [showParking, setShowParking] = useState(false);
   const [nearbyParking, setNearbyParking] = useState([]);
+  const [parkings, setParkings] = useState(DEFAULT_PARKING_LOTS);
+  const [pendingParkingPoint, setPendingParkingPoint] = useState(null);
+  const [pendingParkingName, setPendingParkingName] = useState('');
+  const [pendingParkingType, setPendingParkingType] = useState('Public Parking');
+  const [pendingParkingCapacity, setPendingParkingCapacity] = useState('Medium');
+   const [currentAdminRoutePoints, setCurrentAdminRoutePoints] = useState([]);
+  const [adminRoute, setAdminRoute] = useState(null);
 
   // Load closures from backend on mount
   useEffect(() => {
-    fetch('/api/closures')
-      .then((res) => res.json())
-      .then((data) => setClosures(data))
-      .catch(() => {
-        // ignore for prototype
-      });
+    let cancelled = false;
+
+    const load = async () => {
+      try {
+        const res = await fetch('/api/closures');
+        if (!res.ok) {
+          throw new Error('failed');
+        }
+        const data = await res.json();
+        if (!cancelled && Array.isArray(data)) {
+          setClosures(data);
+          if (typeof window !== 'undefined') {
+            window.localStorage.setItem('jaipur-closures', JSON.stringify(data));
+          }
+        }
+      } catch {
+        if (typeof window !== 'undefined') {
+          const cached = window.localStorage.getItem('jaipur-closures');
+          if (cached && !cancelled) {
+            try {
+              const parsed = JSON.parse(cached);
+              if (Array.isArray(parsed)) {
+                setClosures(parsed);
+              }
+            } catch {
+              // ignore bad cache
+            }
+          }
+        }
+      }
+    };
+
+    load();
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load admin-defined parkings from localStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const cached = window.localStorage.getItem('jaipur-parkings');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 0) {
+          setParkings(parsed);
+        }
+      } catch {
+        // ignore bad cache
+      }
+    }
+  }, []);
+
+  // Load saved admin alternate route from localStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const cached = window.localStorage.getItem('jaipur-admin-route');
+    if (cached) {
+      try {
+        const parsed = JSON.parse(cached);
+        if (Array.isArray(parsed) && parsed.length > 1) {
+          setAdminRoute(parsed);
+        }
+      } catch {
+        // ignore bad cache
+      }
+    }
   }, []);
 
   const handleAddClosurePoint = (latlng) => {
@@ -132,6 +216,13 @@ function App() {
     ];
     setClosures(newClosures);
     setCurrentClosurePoints([]);
+
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem(
+        'jaipur-closures',
+        JSON.stringify(newClosures),
+      );
+    }
 
     setIsSaving(true);
     try {
@@ -153,28 +244,73 @@ function App() {
     setCurrentClosurePoints([]);
   };
 
-  const canRoute = source && destination;
+  const canRoute =
+    role === 'public' ? !!destination : Boolean(source && destination);
 
   const handleComputeRoute = async () => {
-    if (!canRoute) return;
+    // PUBLIC: auto-pick current location as source if missing
+    let effectiveSource = source;
+    if (role === 'public' && !effectiveSource) {
+      if (!destination) {
+        alert('Please tap on the map to choose your destination first.');
+        return;
+      }
+      if (!navigator.geolocation) {
+        alert(
+          'Location access is not available. Please tap on the map to set Source and Destination.',
+        );
+        return;
+      }
+      try {
+        const position = await new Promise((resolve, reject) => {
+          navigator.geolocation.getCurrentPosition(resolve, reject, {
+            enableHighAccuracy: true,
+            timeout: 8000,
+          });
+        });
+        effectiveSource = [
+          position.coords.latitude,
+          position.coords.longitude,
+        ];
+        setSource(effectiveSource);
+      } catch {
+        alert(
+          'Could not access your current location. Please tap on the map to set Source manually.',
+        );
+        return;
+      }
+    }
+
+    if (!effectiveSource || !destination) {
+      alert('Please set both Source and Destination on the map.');
+      return;
+    }
+
     setIsRouting(true);
     try {
+      // If an admin has published a manual safe route, prefer it
+      if (adminRoute && adminRoute.length > 1) {
+        setRoute(adminRoute);
+        setIsRouting(false);
+        return;
+      }
+
       const res = await fetch('/api/route', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ source, destination }),
+        body: JSON.stringify({ source: effectiveSource, destination }),
       });
       if (!res.ok) {
-        setRoute([source, destination]); // fallback straight line
+        setRoute([effectiveSource, destination]); // fallback straight line
         return;
       }
       const data = await res.json();
       if (Array.isArray(data.route) && data.route.length > 0) {
         setRoute(data.route);
       } else {
-        setRoute([source, destination]);
+        setRoute([effectiveSource, destination]);
       }
     } finally {
       setIsRouting(false);
@@ -196,12 +332,12 @@ function App() {
 
   const computeNearbyParking = () => {
     if (!destination) {
-      setNearbyParking(PARKING_LOTS);
+      setNearbyParking(parkings);
       setShowParking(true);
       return;
     }
     const [dLat, dLng] = destination;
-    const withDistance = PARKING_LOTS.map((p) => {
+    const withDistance = parkings.map((p) => {
       const [pLat, pLng] = p.coords;
       const d =
         Math.sqrt((dLat - pLat) ** 2 + (dLng - pLng) ** 2) * 111; // approx km
@@ -210,6 +346,43 @@ function App() {
     withDistance.sort((a, b) => a.distanceKm - b.distanceKm);
     setNearbyParking(withDistance.slice(0, 3));
     setShowParking(true);
+  };
+
+  const handleOpenClosure = async (id) => {
+    const updated = closures.filter((c) => c.id !== id);
+    setClosures(updated);
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('jaipur-closures', JSON.stringify(updated));
+    }
+    try {
+      await fetch('/api/closures', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({ items: updated }),
+      });
+    } catch {
+      // ignore network issues; local state already updated
+    }
+  };
+
+  const handleSaveParking = () => {
+    if (!pendingParkingPoint || !pendingParkingName.trim()) return;
+    const newParking = {
+      id: `parking-${Date.now()}`,
+      name: pendingParkingName.trim(),
+      coords: pendingParkingPoint,
+      type: pendingParkingType,
+      capacity: pendingParkingCapacity,
+    };
+    const updated = [...parkings, newParking];
+    setParkings(updated);
+    setPendingParkingPoint(null);
+    setPendingParkingName('');
+    if (typeof window !== 'undefined') {
+      window.localStorage.setItem('jaipur-parkings', JSON.stringify(updated));
+    }
   };
 
   return (
@@ -251,8 +424,12 @@ function App() {
               mode={interactionMode}
               role={role}
               onAddPointToClosure={handleAddClosurePoint}
+              onAddAltRoutePoint={(latlng) =>
+                setCurrentAdminRoutePoints((prev) => [...prev, latlng])
+              }
               onSetSource={setSource}
               onSetDestination={setDestination}
+              onSetParkingPoint={setPendingParkingPoint}
             />
 
             {closures.map((closure) => (
@@ -285,6 +462,17 @@ function App() {
               />
             )}
 
+            {currentAdminRoutePoints.length > 1 && (
+              <Polyline
+                positions={currentAdminRoutePoints}
+                pathOptions={{
+                  color: '#4ade80',
+                  dashArray: '4 6',
+                  weight: 4,
+                }}
+              />
+            )}
+
             {route && (
               <Polyline
                 positions={route}
@@ -295,10 +483,9 @@ function App() {
             {source && <Marker position={source} />}
             {destination && <Marker position={destination} />}
 
-            {showParking &&
-              (nearbyParking.length > 0 ? nearbyParking : PARKING_LOTS).map(
-                (p) => <Marker key={p.id} position={p.coords} />,
-              )}
+            {parkings.map((p) => (
+              <Marker key={p.id} position={p.coords} icon={parkingIcon} />
+            ))}
           </MapContainer>
 
           <div className="map-legend">
@@ -420,7 +607,14 @@ function App() {
                           {c.status === 'closed' ? 'Closed' : c.status}
                         </div>
                       </div>
-                      <span className="list-item-badge">Active</span>
+                      <button
+                        type="button"
+                        className="btn-secondary"
+                        style={{ fontSize: '0.65rem', padding: '0.2rem 0.5rem' }}
+                        onClick={() => handleOpenClosure(c.id)}
+                      >
+                        Open
+                      </button>
                     </li>
                   ))}
                   {closures.length === 0 && (
@@ -434,6 +628,75 @@ function App() {
                     </li>
                   )}
                 </ul>
+              </section>
+
+              <section className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">
+                    <div className="panel-title-icon">🧭</div>
+                    <span>Admin Safe Route</span>
+                  </div>
+                  <span className="panel-subtitle">
+                    Draw highlighted green corridor
+                  </span>
+                </div>
+
+                <div className="field-group">
+                  <div className="field-row">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setInteractionMode('altRoute')}
+                      style={{
+                        flex: 1,
+                        borderColor:
+                          interactionMode === 'altRoute'
+                            ? 'rgba(34,197,94,0.9)'
+                            : undefined,
+                      }}
+                    >
+                      Draw safe route
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => {
+                        setCurrentAdminRoutePoints([]);
+                        setAdminRoute(null);
+                        if (typeof window !== 'undefined') {
+                          window.localStorage.removeItem('jaipur-admin-route');
+                        }
+                      }}
+                    >
+                      Clear
+                    </button>
+                  </div>
+
+                  <div className="field-hint">
+                    Click along the map to draw the preferred green corridor
+                    that citizens should follow.
+                  </div>
+
+                  <div className="btn-row">
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      disabled={currentAdminRoutePoints.length < 2}
+                      onClick={() => {
+                        setAdminRoute(currentAdminRoutePoints);
+                        if (typeof window !== 'undefined') {
+                          window.localStorage.setItem(
+                            'jaipur-admin-route',
+                            JSON.stringify(currentAdminRoutePoints),
+                          );
+                        }
+                        setCurrentAdminRoutePoints([]);
+                      }}
+                    >
+                      Save safe route
+                    </button>
+                  </div>
+                </div>
               </section>
 
               <section className="panel">
@@ -463,6 +726,116 @@ function App() {
                     </button>
                   </div>
                 </div>
+              </section>
+
+              <section className="panel">
+                <div className="panel-header">
+                  <div className="panel-title">
+                    <div className="panel-title-icon">🅿️</div>
+                    <span>Define Parking</span>
+                  </div>
+                  <span className="panel-subtitle">Admin-only parking spots</span>
+                </div>
+
+                <div className="field-group">
+                  <div className="field-row">
+                    <div className="field">
+                      <span className="field-label">Location on map</span>
+                      <div className="field-hint">
+                        Switch to parking mode and click on the map to pick a
+                        parking point.
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="field-row">
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setInteractionMode('parking')}
+                      style={{
+                        flex: 1,
+                        borderColor:
+                          interactionMode === 'parking'
+                            ? 'rgba(96, 165, 250, 0.9)'
+                            : undefined,
+                      }}
+                    >
+                      Pick on map
+                    </button>
+                    <button
+                      type="button"
+                      className="btn-secondary"
+                      onClick={() => setInteractionMode('closure')}
+                    >
+                      Back to roads
+                    </button>
+                  </div>
+
+                  <div className="field">
+                    <span className="field-label">Parking name</span>
+                    <input
+                      type="text"
+                      placeholder="e.g. Stadium Event Parking"
+                      value={pendingParkingName}
+                      onChange={(e) => setPendingParkingName(e.target.value)}
+                    />
+                  </div>
+
+                  <div className="field-row">
+                    <div className="field">
+                      <span className="field-label">Type</span>
+                      <select
+                        value={pendingParkingType}
+                        onChange={(e) => setPendingParkingType(e.target.value)}
+                      >
+                        <option>Public Parking</option>
+                        <option>Event Parking</option>
+                        <option>Multi-level</option>
+                        <option>Metro Parking</option>
+                        <option>Railway Parking</option>
+                      </select>
+                    </div>
+                    <div className="field">
+                      <span className="field-label">Capacity</span>
+                      <select
+                        value={pendingParkingCapacity}
+                        onChange={(e) =>
+                          setPendingParkingCapacity(e.target.value)
+                        }
+                      >
+                        <option>Small</option>
+                        <option>Medium</option>
+                        <option>Large</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div className="btn-row">
+                    <button
+                      type="button"
+                      className="btn-primary"
+                      disabled={!pendingParkingPoint || !pendingParkingName}
+                      onClick={handleSaveParking}
+                    >
+                      Save parking
+                    </button>
+                  </div>
+                </div>
+
+                <ul className="parking-list">
+                  {parkings.map((p) => (
+                    <li key={p.id} className="parking-item">
+                      <div className="parking-item-main">
+                        <div className="parking-item-title">{p.name}</div>
+                        <div className="parking-item-meta">
+                          {p.type} · {p.capacity} capacity
+                        </div>
+                      </div>
+                      <span className="parking-badge">Parking</span>
+                    </li>
+                  ))}
+                </ul>
               </section>
             </>
           )}
@@ -594,7 +967,7 @@ function App() {
                 </div>
 
                 <ul className="parking-list">
-                  {(nearbyParking.length > 0 ? nearbyParking : PARKING_LOTS).map(
+                  {(nearbyParking.length > 0 ? nearbyParking : parkings).map(
                     (p) => (
                       <li key={p.id} className="parking-item">
                         <div className="parking-item-main">
