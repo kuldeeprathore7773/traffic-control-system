@@ -1,70 +1,76 @@
-# Getting Started with Create React App
+## Jaipur Traffic Control System (React + Node)
 
-This project was bootstrapped with [Create React App](https://github.com/facebook/create-react-app).
+This app is a prototype for managing traffic diversions in Jaipur during government / public events such as political rallies and VIP movement.
 
-## Available Scripts
+It is visually inspired by the SOS and route experience on [`shyamsarathi.com/route.html`](https://shyamsarathi.com/route.html) but focused on **Jaipur traffic diversion control**.
 
-In the project directory, you can run:
+### Features
 
-### `npm start`
+- **Live Jaipur map** using OpenStreetMap + Leaflet.
+- **Hidden admin diversion editor (dashboard)**: login-only panel (opened via keyboard) to sketch and save closed road segments for rallies / VIP corridors.
+- **Public citizen view**: users can see closed roads, request a safe alternate route and discover nearby organised parking.
+- **Basic SOS panel** inspired by [`shyamsarathi.com/route.html`](https://shyamsarathi.com/route.html) for contacting control room (UI only in this prototype).
+- **Simple Node/Express backend** that stores closures in memory (`/server/index.js`) and calls OpenRouteService for routing.
 
-Runs the app in the development mode.\
-Open [http://localhost:3000](http://localhost:3000) to view it in your browser.
+### Getting started
 
-The page will reload when you make changes.\
-You may also see any lint errors in the console.
+1. Install dependencies (from the project root):
 
-### `npm test`
+```bash
+npm install
+```
 
-Launches the test runner in the interactive watch mode.\
-See the section about [running tests](https://facebook.github.io/create-react-app/docs/running-tests) for more information.
+2. Start backend + frontend together:
 
-### `npm run build`
+```bash
+npm run dev
+```
 
-Builds the app for production to the `build` folder.\
-It correctly bundles React in production mode and optimizes the build for the best performance.
+- React frontend: `http://localhost:3000`
+- Node API: `http://localhost:5000` (proxied from the frontend as `/api/...`)
 
-The build is minified and the filenames include the hashes.\
-Your app is ready to be deployed!
+### Configure real routing (OpenRouteService)
 
-See the section about [deployment](https://facebook.github.io/create-react-app/docs/deployment) for more information.
+This project is wired to use **OpenRouteService** for real car routing that avoids closed segments.
 
-### `npm run eject`
+1. Create a free account and API key at [`openrouteservice.org`](https://openrouteservice.org/).
+2. Set the key in your environment before starting the server (PowerShell example):
 
-**Note: this is a one-way operation. Once you `eject`, you can't go back!**
+```powershell
+$env:ORS_API_KEY="YOUR_API_KEY_HERE"
+npm run dev
+```
 
-If you aren't satisfied with the build tool and configuration choices, you can `eject` at any time. This command will remove the single build dependency from your project.
+or for a single server run:
 
-Instead, it will copy all the configuration files and the transitive dependencies (webpack, Babel, ESLint, etc) right into your project so you have full control over them. All of the commands except `eject` will still work, but they will point to the copied scripts so you can tweak them. At this point you're on your own.
+```powershell
+$env:ORS_API_KEY="YOUR_API_KEY_HERE"
+npm run server
+```
 
-You don't have to ever use `eject`. The curated feature set is suitable for small and middle deployments, and you shouldn't feel obligated to use this feature. However we understand that this tool wouldn't be useful if you couldn't customize it when you are ready for it.
+When configured, the frontend route button will call `POST /api/route`, which:
 
-## Learn More
+- Sends source + destination to OpenRouteService.
+- Asks it to avoid the currently configured closed segments.
+- Returns a polyline that is rendered as a green route on the Jaipur map.
 
-You can learn more in the [Create React App documentation](https://facebook.github.io/create-react-app/docs/getting-started).
+### How to use – admin dashboard (control room)
 
-To learn React, check out the [React documentation](https://reactjs.org/).
+- The admin console is **not visible in the normal UI**.
+- To access it, open `http://localhost:3000/admin` in your browser.
+- The login dialog will appear automatically – enter the demo password: **`admin123`**.
+- In the **Traffic Control Dashboard**:
+  - Choose **Draw Closed Road** and click multiple times on the map to sketch a diversion, then press **Save closed segment**.
+  - Switch to **Source / Destination** if you want to quickly simulate a route that citizens will see.
+- Saved diversions appear as red segments and are stored in the backend for public users to avoid.
 
-### Code Splitting
+### How to use – public citizen view
 
-This section has moved here: [https://facebook.github.io/create-react-app/docs/code-splitting](https://facebook.github.io/create-react-app/docs/code-splitting)
+- By default the app is in **public view** – there is no admin toggle visible.
+- Use **Source** and **Destination** modes on the map to select your trip.
+- Press **Get safe alternate route** to see a green route that avoids closed segments configured by the admin.
+- The **Nearby Parking** panel:
+  - Press **Find parking near destination** to list and highlight a few curated parking locations close to your destination in Jaipur.
+  - Parking markers are shown on the map along with the route.
+- Use the **SOS सहायता** panel as the conceptual place where, in production, a user would raise a traffic SOS to the control room.
 
-### Analyzing the Bundle Size
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size](https://facebook.github.io/create-react-app/docs/analyzing-the-bundle-size)
-
-### Making a Progressive Web App
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app](https://facebook.github.io/create-react-app/docs/making-a-progressive-web-app)
-
-### Advanced Configuration
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/advanced-configuration](https://facebook.github.io/create-react-app/docs/advanced-configuration)
-
-### Deployment
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/deployment](https://facebook.github.io/create-react-app/docs/deployment)
-
-### `npm run build` fails to minify
-
-This section has moved here: [https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify](https://facebook.github.io/create-react-app/docs/troubleshooting#npm-run-build-fails-to-minify)
